@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd C:/Users/Ronzo/StudyTube/fortend && npm install 2>&1)",
+      "Bash(where node:*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Users/Ronzo/AppData/Roaming/**)",
+      "Read(//c/Users/Ronzo/.bun/**)"
+    ]
+  }
+}
