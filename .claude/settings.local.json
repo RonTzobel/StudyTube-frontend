@@ -5,7 +5,8 @@
       "Bash(where node:*)",
       "Read(//c/Program Files/**)",
       "Read(//c/Users/Ronzo/AppData/Roaming/**)",
-      "Read(//c/Users/Ronzo/.bun/**)"
+      "Read(//c/Users/Ronzo/.bun/**)",
+      "Bash(cd:*)"
     ]
   }
 }
