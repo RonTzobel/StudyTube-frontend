@@ -3,8 +3,15 @@ const API = `${BASE_URL}/api/v1`
 
 // Generic request helper — surfaces errors from JSON body if available.
 // Returns null for 204 No Content responses.
+// Automatically attaches the stored JWT as Authorization: Bearer <token>.
 async function request(method, path, body = null, isFormData = false) {
   const options = { method, headers: {} }
+
+  // Attach JWT if present — set by AuthContext after login / register / Google OAuth
+  const token = localStorage.getItem('st_token')
+  if (token) {
+    options.headers['Authorization'] = `Bearer ${token}`
+  }
 
   if (body && !isFormData) {
     options.headers['Content-Type'] = 'application/json'
@@ -17,6 +24,16 @@ async function request(method, path, body = null, isFormData = false) {
   const res = await fetch(`${API}${path}`, options)
 
   if (!res.ok) {
+    // Central 401 handler: token is missing, expired, or invalid.
+    // Clear local storage and hard-redirect to /login so the user can re-authenticate.
+    // We use window.location.href because api.js has no access to React Router or
+    // AuthContext — this is the cleanest decoupled approach.
+    if (res.status === 401) {
+      localStorage.removeItem('st_token')
+      window.location.href = '/login'
+      throw new Error('Session expired. Please log in again.')
+    }
+
     let message = `HTTP ${res.status}`
     try {
       const err = await res.json()
@@ -29,6 +46,33 @@ async function request(method, path, body = null, isFormData = false) {
 
   if (res.status === 204) return null
   return res.json()
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+
+// POST /api/v1/auth/login  body: { email, password }
+// → { access_token: string, token_type: "bearer", user: {...} }
+export function authLogin(email, password) {
+  return request('POST', '/auth/login', { email, password })
+}
+
+// POST /api/v1/auth/register  body: { full_name, email, password }
+// → { access_token: string, token_type: "bearer", user: {...} }
+export function authRegister(fullName, email, password) {
+  return request('POST', '/auth/register', { full_name: fullName, email, password })
+}
+
+// GET /api/v1/auth/me  → user object (requires Authorization header)
+export function authMe() {
+  return request('GET', '/auth/me')
+}
+
+// Google OAuth entry point — NOT a fetch call.
+// Returns the URL the browser should be sent to (full path including /api/v1).
+// The backend handles the full Google OAuth dance, then redirects back to
+// /auth/callback?token=<backend_JWT> so both auth paths end with the same token.
+export function getGoogleLoginUrl() {
+  return `${API}/auth/google/login`
 }
 
 // ── Videos ────────────────────────────────────────────────────────────────
@@ -68,6 +112,11 @@ export function getChunks(videoId) {
 // POST /api/v1/videos/{id}/embed  → List[ChunkRead]
 export function embedVideo(videoId) {
   return request('POST', `/videos/${videoId}/embed`)
+}
+
+// DELETE /api/v1/videos/{id}  → 204 No Content
+export function deleteVideo(videoId) {
+  return request('DELETE', `/videos/${videoId}`)
 }
 
 // POST /api/v1/videos/{id}/search  body: { query, top_k }  → List[RetrievedChunkRead]

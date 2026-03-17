@@ -130,6 +130,18 @@
   color: var(--text);
 }
 
+.btn.danger {
+  background: transparent;
+  border-color: var(--error, #e05252);
+  color: var(--error, #e05252);
+  font-size: 12px;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: var(--error, #e05252);
+  color: #fff;
+}
+
 /* ── Inputs ─────────────────────────────────────────── */
 
 input[type="text"],
@@ -1049,4 +1061,149 @@ input[type="file"] {
 .chat-textarea:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ── Auth: email + password inputs ─────────────────────
+   Extend the existing input styling to cover auth field types. */
+
+input[type="email"],
+input[type="password"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: var(--font);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+input[type="email"]:focus,
+input[type="password"]:focus {
+  border-color: var(--accent);
+}
+
+input[type="email"]:disabled,
+input[type="password"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Auth pages ─────────────────────────────────────── */
+
+.auth-page {
+  display: flex;
+  justify-content: center;
+  padding-top: 48px;
+}
+
+.auth-panel {
+  width: 100%;
+  max-width: 400px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Full-width button (used on auth pages) */
+.btn-block {
+  width: 100%;
+  justify-content: center;
+}
+
+/* "or" divider between form and Google button */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Google OAuth button */
+.btn-google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--surface-hi);
+  border-color: var(--border);
+}
+
+.btn-google:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-hi);
+}
+
+/* "Already have an account?" link line */
+.auth-switch {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.auth-switch a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.auth-switch a:hover {
+  text-decoration: underline;
+}
+
+/* Shown while AuthContext is rehydrating the session on startup */
+.auth-loading {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ── Header: user info + logout ─────────────────────── */
+
+.app-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-username {
+  font-size: 13px;
+  color: var(--text-muted);
 }

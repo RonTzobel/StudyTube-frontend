@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listVideos, uploadVideo, transcribeVideo, chunkVideo, embedVideo } from '../services/api'
+import { listVideos, uploadVideo, transcribeVideo, chunkVideo, embedVideo, deleteVideo } from '../services/api'
 import UploadPanel from './UploadPanel'
 import ProcessingStatus from './ProcessingStatus'
 
@@ -29,6 +29,8 @@ export default function VideoList() {
   const [videos, setVideos]         = useState([])
   const [loading, setLoading]       = useState(true)
   const [fetchError, setFetchError] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
+  const [deleteError, setDeleteError] = useState(null)
 
   // Upload pipeline state (mirrors App.jsx's original logic)
   const [phase, setPhase]               = useState('idle')
@@ -86,6 +88,20 @@ export default function VideoList() {
     setUploadedVideo(null)
   }
 
+  async function handleDelete(video) {
+    if (!window.confirm(`Delete "${video.title || 'Untitled'}"? This cannot be undone.`)) return
+    setDeletingId(video.id)
+    setDeleteError(null)
+    try {
+      await deleteVideo(video.id)
+      setVideos(prev => prev.filter(v => v.id !== video.id))
+    } catch (err) {
+      setDeleteError(err.message)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <div>
       {phase === 'idle' ? (
@@ -108,6 +124,7 @@ export default function VideoList() {
         </div>
 
         {fetchError && <p className="msg error">{fetchError}</p>}
+        {deleteError && <p className="msg error">{deleteError}</p>}
 
         {!loading && !fetchError && videos.length === 0 && (
           <p className="msg hint">No videos yet. Upload one above to get started.</p>
@@ -122,14 +139,23 @@ export default function VideoList() {
                   <span className={statusBadgeClass(v.status)}>{statusLabel(v.status)}</span>
                 </div>
                 <div className="video-card-meta">
-                  ID: {v.id} &bull; {new Date(v.created_at).toLocaleDateString()}
+                  {new Date(v.created_at).toLocaleDateString()}
                 </div>
-                <button
-                  className="btn small primary"
-                  onClick={() => navigate(`/videos/${v.id}`, { state: { video: v } })}
-                >
-                  View
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="btn small primary"
+                    onClick={() => navigate(`/videos/${v.id}`, { state: { video: v } })}
+                  >
+                    View
+                  </button>
+                  <button
+                    className="btn small danger"
+                    onClick={() => handleDelete(v)}
+                    disabled={deletingId === v.id}
+                  >
+                    {deletingId === v.id ? 'Deleting…' : 'Delete'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
