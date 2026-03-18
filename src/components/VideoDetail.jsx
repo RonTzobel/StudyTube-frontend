@@ -2,19 +2,53 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import {
   listVideos, getSummary, quizVideo,
-  createChatSession, getChatSessions,
+  createChatSession, getChatSessions, getChunks,
 } from '../services/api'
 
-function statusLabel(status) {
+// ── Readiness helpers ──────────────────────────────────────────────────────
+//
+// Backend status values:
+//   uploaded / pending  → file stored, not yet processed
+//   processing          → transcription running
+//   done                → transcript exists  (NOT necessarily indexed)
+//   failed              → transcription error
+//
+// "done" is NOT sufficient for chat/quiz — those require chunk + embed.
+// We infer indexing readiness by checking whether any stored chunks are embedded.
+// This is the only signal available without a backend schema change.
+
+function statusLabel(status, isAiReady) {
   switch (status) {
+    case 'ready':      return 'Ready'
+    case 'done':       return isAiReady ? 'Ready' : 'Transcript ready'
     case 'pending':
-    case 'uploaded':    return 'Uploaded'
-    case 'processing':  return 'Processing…'
-    case 'done':        return 'Transcribed'
-    case 'failed':      return 'Failed'
-    default:            return status || 'Unknown'
+    case 'uploaded':   return 'Uploaded'
+    case 'processing': return 'Processing…'
+    case 'failed':     return 'Failed'
+    default:           return status || 'Unknown'
   }
 }
+
+function statusBadgeClass(status, isAiReady) {
+  if (status === 'ready') return 'badge badge--success'
+  if (status === 'done')  return isAiReady ? 'badge badge--success' : 'badge badge--warn'
+  switch (status) {
+    case 'processing': return 'badge badge--warn'
+    case 'failed':     return 'badge badge--error'
+    default:           return 'badge badge--muted'
+  }
+}
+
+// Map raw backend errors containing implementation details to user-friendly copy.
+function friendlyError(raw) {
+  const lower = (raw || '').toLowerCase()
+  if (lower.includes('embedded') || lower.includes('chunk')) {
+    return 'This video isn\'t fully indexed yet. Chat and quiz will become available once AI processing completes.'
+  }
+  return raw
+}
+
+// ── Component ──────────────────────────────────────────────────────────────
 
 export default function VideoDetail() {
   const { id } = useParams()
@@ -22,13 +56,16 @@ export default function VideoDetail() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  // Use video passed via navigation state as initial value; fetch if missing
   const [video, setVideo]       = useState(location.state?.video ?? null)
   const [sessions, setSessions] = useState([])
   const [summary, setSummary]   = useState(null)
   const [quiz, setQuiz]         = useState(null)
   const [quizAnswers, setQuizAnswers]   = useState({})
   const [quizSubmitted, setQuizSubmitted] = useState(false)
+
+  // AI readiness: derived from chunk data, not just video.status
+  const [embeddedChunkCount, setEmbeddedChunkCount] = useState(0)
+  const [loadingChunks, setLoadingChunks]           = useState(true)
 
   const [loadingVideo, setLoadingVideo]     = useState(!location.state?.video)
   const [loadingSummary, setLoadingSummary] = useState(false)
@@ -42,29 +79,49 @@ export default function VideoDetail() {
 
   useEffect(() => {
     async function load() {
-      // Fetch video from list if not already available
-      if (!video) {
+      let vid = video
+
+      // Fetch video from list if not passed via navigation state
+      if (!vid) {
         setLoadingVideo(true)
         try {
           const all = await listVideos()
           const found = all.find(v => v.id === videoId)
-          if (!found) { setVideoError('Video not found.'); return }
+          if (!found) {
+            setVideoError('Video not found.')
+            setLoadingChunks(false)
+            return
+          }
           setVideo(found)
+          vid = found
         } catch (err) {
           setVideoError(err.message)
+          setLoadingChunks(false)
           return
         } finally {
           setLoadingVideo(false)
         }
       }
 
-      // Fetch all sessions and filter to this video
+      // Non-fatal: fetch chat sessions for this video
       try {
         const all = await getChatSessions()
         setSessions(all.filter(s => s.video_id === videoId))
-      } catch (_) {
-        // Non-fatal — sessions list just stays empty
+      } catch (_) {}
+
+      // Non-fatal: fetch chunks to check whether embeddings exist.
+      // Only worth calling when the transcript is ready (status === 'done').
+      // While this is loading, Chat and Quiz stay disabled (safe default).
+      if (vid?.status === 'done') {
+        try {
+          const list = await getChunks(videoId)
+          const chunks = Array.isArray(list) ? list : []
+          setEmbeddedChunkCount(chunks.filter(c => c.is_embedded).length)
+        } catch (_) {
+          // Can't verify — leave count at 0 (buttons stay disabled, safe default)
+        }
       }
+      setLoadingChunks(false)
     }
     load()
   }, [videoId])
@@ -75,7 +132,7 @@ export default function VideoDetail() {
     try {
       setSummary(await getSummary(videoId))
     } catch (err) {
-      setSummaryError(err.message)
+      setSummaryError(friendlyError(err.message))
     } finally {
       setLoadingSummary(false)
     }
@@ -88,7 +145,7 @@ export default function VideoDetail() {
       const session = await createChatSession(videoId)
       navigate(`/chat/${session.id}`, { state: { session, video } })
     } catch (err) {
-      setChatError(err.message)
+      setChatError(friendlyError(err.message))
     } finally {
       setLoadingChat(false)
     }
@@ -103,7 +160,7 @@ export default function VideoDetail() {
     try {
       setQuiz(await quizVideo(videoId, 5))
     } catch (err) {
-      setQuizError(err.message)
+      setQuizError(friendlyError(err.message))
     } finally {
       setLoadingQuiz(false)
     }
@@ -117,8 +174,13 @@ export default function VideoDetail() {
   }
   if (!video) return null
 
-  const hasTranscript = video.status === 'done' || video.status === 'processing'
-  const isDone = video.status === 'done'
+  // Transcript exists once status is 'done' or 'ready' — sufficient for summary
+  const isDone = video.status === 'done' || video.status === 'ready'
+
+  // 'ready' is the backend's explicit signal that chunk + embed are complete.
+  // For older 'done' videos without that status, fall back to checking embedded chunks.
+  const isAiReady = video.status === 'ready'
+    || (video.status === 'done' && !loadingChunks && embeddedChunkCount > 0)
 
   const quizScore = quiz && quizSubmitted
     ? quiz.questions.filter((q, i) => quizAnswers[i] === q.correct_answer).length
@@ -133,8 +195,8 @@ export default function VideoDetail() {
       <section className="panel">
         <h2>{video.title || 'Untitled Video'}</h2>
         <div className="video-detail-meta">
-          <span className={isDone ? 'badge badge--success' : 'badge badge--muted'}>
-            {statusLabel(video.status)}
+          <span className={statusBadgeClass(video.status, isAiReady)}>
+            {statusLabel(video.status, isAiReady)}
           </span>
           <span className="text-muted">ID: {video.id}</span>
           <span className="text-muted">{new Date(video.created_at).toLocaleString()}</span>
@@ -146,15 +208,33 @@ export default function VideoDetail() {
               {loadingSummary ? 'Loading…' : 'Get Summary'}
             </button>
           )}
-          <button className="btn primary" onClick={handleStartChat} disabled={loadingChat}>
+          <button
+            className="btn primary"
+            onClick={handleStartChat}
+            disabled={loadingChat || !isAiReady}
+            title={isAiReady ? undefined : 'Available once AI indexing is complete'}
+          >
             {loadingChat ? 'Starting…' : 'Start Chat'}
           </button>
           {isDone && (
-            <button className="btn" onClick={handleTakeQuiz} disabled={loadingQuiz}>
+            <button
+              className="btn"
+              onClick={handleTakeQuiz}
+              disabled={loadingQuiz || !isAiReady}
+              title={isAiReady ? undefined : 'Available once AI indexing is complete'}
+            >
               {loadingQuiz ? 'Generating…' : 'Take Quiz'}
             </button>
           )}
         </div>
+
+        {/* Friendly hint when transcript is ready but indexing isn't done yet */}
+        {isDone && !isAiReady && !loadingChunks && (
+          <p className="msg hint" style={{ marginTop: 12 }}>
+            AI indexing is not complete yet — Chat and Quiz will unlock automatically once it finishes.
+            Summary is available now.
+          </p>
+        )}
 
         {chatError    && <p className="msg error" style={{ marginTop: 12 }}>{chatError}</p>}
         {summaryError && <p className="msg error" style={{ marginTop: 12 }}>{summaryError}</p>}
@@ -199,7 +279,7 @@ export default function VideoDetail() {
   )
 }
 
-// ── Summary ───────────────────────────────────────────────────────────────
+// ── Summary ────────────────────────────────────────────────────────────────
 
 function SummaryCard({ summary }) {
   return (
@@ -238,7 +318,7 @@ function SummaryCard({ summary }) {
   )
 }
 
-// ── Quiz ──────────────────────────────────────────────────────────────────
+// ── Quiz ───────────────────────────────────────────────────────────────────
 
 function QuizCard({ quiz, answers, submitted, score, onChange, onSubmit, onRetry }) {
   const total = quiz.questions.length

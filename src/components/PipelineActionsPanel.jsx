@@ -1,13 +1,19 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   transcribeVideo,
+  getVideo,
   getTranscript,
   chunkVideo,
   getChunks,
   embedVideo,
 } from '../services/api'
 
-// Manages state for a single pipeline step
+const FAST_POLL_MS     = 3_000
+const SLOW_POLL_MS     = 30_000
+const SLOW_AFTER_MS    = 10 * 60 * 1000
+const GIVE_UP_AFTER_MS = 60 * 60 * 1000
+
+// Generic hook for pipeline steps that complete synchronously
 function usePipelineStep(apiFn) {
   const [loading, setLoading] = useState(false)
   const [data, setData]       = useState(null)
@@ -26,11 +32,83 @@ function usePipelineStep(apiFn) {
     }
   }
 
-  return { loading, data, error, run }
+  return { loading, data, error, run, loadingLabel: 'Running…' }
+}
+
+// Specialised hook for transcription: fires the job (202) then polls for completion.
+// Slows down after 10 min and gives up (without failing) after 1 hour.
+function useTranscribeStep() {
+  const [loading, setLoading]     = useState(false)
+  const [data, setData]           = useState(null)
+  const [error, setError]         = useState(null)
+  const [pollPhase, setPollPhase] = useState(null) // 'starting' | 'polling' | 'waiting'
+  const cancelRef = useRef(false)
+
+  // Cancel on unmount
+  useEffect(() => () => { cancelRef.current = true }, [])
+
+  async function run(videoId) {
+    cancelRef.current = false
+    setLoading(true)
+    setError(null)
+    setData(null)
+    setPollPhase('starting')
+
+    try {
+      // Kick off transcription — backend returns 202 right away
+      await transcribeVideo(videoId)
+      if (cancelRef.current) return
+
+      setPollPhase('polling')
+      const start = Date.now()
+
+      while (!cancelRef.current) {
+        const elapsed  = Date.now() - start
+        if (elapsed >= GIVE_UP_AFTER_MS) {
+          // Backend has not failed — job is still running.
+          // Show a neutral message and leave the button re-runnable.
+          setError('Still processing after 1 hour. The job may still be running — check back later or retry.')
+          return
+        }
+
+        const interval = elapsed < SLOW_AFTER_MS ? FAST_POLL_MS : SLOW_POLL_MS
+        await new Promise(r => setTimeout(r, interval))
+        if (cancelRef.current) return
+
+        if (elapsed >= SLOW_AFTER_MS && pollPhase !== 'waiting') {
+          setPollPhase('waiting')
+        }
+
+        const vid = await getVideo(videoId)
+        if (cancelRef.current) return
+
+        if (vid.status === 'done') {
+          setData(vid)
+          return
+        }
+        if (vid.status === 'failed') {
+          throw new Error('Transcription failed on the server. Check the video and try again.')
+        }
+      }
+    } catch (err) {
+      if (!cancelRef.current) setError(err.message)
+    } finally {
+      if (!cancelRef.current) {
+        setLoading(false)
+        setPollPhase(null)
+      }
+    }
+  }
+
+  const loadingLabel =
+    pollPhase === 'starting' ? 'Starting…' :
+    pollPhase === 'waiting'  ? 'Still running…' :
+    'Transcribing…'
+  return { loading, data, error, run, loadingLabel }
 }
 
 export default function PipelineActionsPanel({ videoId }) {
-  const transcribe = usePipelineStep(transcribeVideo)
+  const transcribe = useTranscribeStep()
   const transcript = usePipelineStep(getTranscript)
   const chunk      = usePipelineStep(chunkVideo)
   const chunks     = usePipelineStep(getChunks)
@@ -39,7 +117,7 @@ export default function PipelineActionsPanel({ videoId }) {
   const steps = [
     {
       label: 'Transcribe',
-      hint:  'Run Whisper on the video audio to generate a transcript.',
+      hint:  'Start Whisper transcription in the background. The UI will poll until done.',
       step:  transcribe,
     },
     {
@@ -84,7 +162,7 @@ export default function PipelineActionsPanel({ videoId }) {
                 disabled={noVideo || step.loading}
                 onClick={() => step.run(videoId)}
               >
-                {step.loading ? 'Running…' : 'Run'}
+                {step.loading ? step.loadingLabel : 'Run'}
               </button>
             </div>
             <p className="step-hint">{hint}</p>

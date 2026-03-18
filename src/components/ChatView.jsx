@@ -56,12 +56,11 @@ export default function ChatView() {
         setSources(prev => ({ ...prev, [result.assistant_message.id]: result.answer_source }))
       }
     } catch (err) {
-      // Give a clear message when the video hasn't been embedded yet
       const detail = err.message || ''
       if (detail.toLowerCase().includes('embedded') || detail.toLowerCase().includes('chunk')) {
         setError(
-          'This video is not ready for chat yet — embeddings have not been generated. ' +
-          'Go back and run the Chunk → Embed steps first.'
+          'This video isn\'t ready for chat yet — AI indexing hasn\'t completed. ' +
+          'Go back to the video page and check its status.'
         )
       } else {
         setError(detail)

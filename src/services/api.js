@@ -45,6 +45,14 @@ async function request(method, path, body = null, isFormData = false) {
   }
 
   if (res.status === 204) return null
+
+  // 202 Accepted — backend started a background job; body may or may not be present
+  if (res.status === 202) {
+    const text = await res.text()
+    if (!text.trim()) return null
+    try { return JSON.parse(text) } catch (_) { return null }
+  }
+
   return res.json()
 }
 
@@ -82,6 +90,11 @@ export function listVideos() {
   return request('GET', '/videos/')
 }
 
+// GET /api/v1/videos/{id}  → VideoRead
+export function getVideo(videoId) {
+  return request('GET', `/videos/${videoId}`)
+}
+
 // POST /api/v1/videos/upload  (multipart/form-data, field: "file")  → VideoRead
 export function uploadVideo(file) {
   const form = new FormData()
@@ -89,7 +102,8 @@ export function uploadVideo(file) {
   return request('POST', '/videos/upload', form, true)
 }
 
-// POST /api/v1/videos/{id}/transcribe  → TranscriptRead
+// POST /api/v1/videos/{id}/transcribe  → 202 Accepted (background job started)
+// Poll GET /api/v1/videos/{id} until status === 'done' or 'failed'.
 export function transcribeVideo(videoId) {
   return request('POST', `/videos/${videoId}/transcribe`)
 }
