@@ -1,5 +1,5 @@
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const API = `${BASE_URL}/api/v1`
+const API = `${BASE_URL}/v1`
 
 // Generic request helper — surfaces errors from JSON body if available.
 // Returns null for 204 No Content responses.
@@ -90,9 +90,9 @@ export function listVideos() {
   return request('GET', '/videos/')
 }
 
-// GET /api/v1/videos/{id}  → VideoRead
+// GET /api/v1/videos/{id}/status  → VideoRead (used for polling; the bare /{id} route is DELETE-only)
 export function getVideo(videoId) {
-  return request('GET', `/videos/${videoId}`)
+  return request('GET', `/videos/${videoId}/status`)
 }
 
 // POST /api/v1/videos/upload  (multipart/form-data, field: "file")  → VideoRead
