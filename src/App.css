@@ -1146,6 +1146,12 @@ input[type="password"]:disabled {
   gap: 5px;
 }
 
+.input-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+
 .form-label {
   font-size: 13px;
   color: var(--text-muted);

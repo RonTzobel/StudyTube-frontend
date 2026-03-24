@@ -16,6 +16,14 @@ export default function RegisterPage() {
   async function handleSubmit(e) {
     e.preventDefault()
     if (!fullName.trim() || !email.trim() || !password) return
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.')
+      return
+    }
+    if (password.length > 64) {
+      setError('Password is too long. Please choose a shorter password.')
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -77,6 +85,7 @@ export default function RegisterPage() {
               required
               autoComplete="new-password"
             />
+            <p className="input-hint">Use 8–64 characters.</p>
           </div>
 
           {error && <p className="msg error">{error}</p>}
@@ -98,6 +107,9 @@ function friendlyRegisterError(msg) {
   const m = (msg || '').toLowerCase()
   if (m.includes('already') || m.includes('exists') || m.includes('duplicate')) {
     return 'An account with this email already exists.'
+  }
+  if (m.includes('password')) {
+    return 'Password is invalid. Please choose a password between 8 and 64 characters.'
   }
   if (m.includes('network') || m.includes('failed to fetch')) {
     return 'Cannot reach the server. Check your connection.'
