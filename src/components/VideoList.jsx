@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listVideos, getVideo, uploadVideo, transcribeVideo, chunkVideo, embedVideo, deleteVideo } from '../services/api'
+import { listVideos, getVideo, uploadVideo, transcribeVideo, deleteVideo } from '../services/api'
 import UploadPanel from './UploadPanel'
 import ProcessingStatus from './ProcessingStatus'
 import ConfirmModal from './ConfirmModal'
@@ -11,19 +11,23 @@ const SLOW_AFTER_MS    = 10 * 60 * 1000 // switch to slow polling after this
 const GIVE_UP_AFTER_MS = 60 * 60 * 1000 // stop polling entirely after this
 const POLL_INTERVAL_MS = 5000           // background card-list poll interval (ms)
 
+// All backend statuses that mean "still working" — used for background polling
+const IN_PROGRESS_STATUSES = new Set(['queued', 'processing', 'transcribing', 'embedding'])
+
 // Returned (never thrown) when 1 hour passes and the backend has not yet
 // reported done or failed. This is NOT a failure — the job may still be running.
 const POLL_GAVE_UP = Symbol('poll-gave-up')
 
-// Resolves with a VideoRead on success.
-// Returns POLL_GAVE_UP if the 1-hour window expires while backend is still 'processing'.
+// Resolves with a VideoRead when backend reaches 'completed'.
+// Returns POLL_GAVE_UP if the 1-hour window expires while still in progress.
 // Throws only on genuine backend failure or network errors.
-async function pollUntilReady(videoId, signal, onLongRunning) {
+// onStatusChange(status) is called each poll cycle so the UI can advance its steps.
+async function pollUntilReady(videoId, signal, onLongRunning, onStatusChange) {
   const start = Date.now()
   let slowPhaseNotified = false
 
   while (true) {
-    const elapsed  = Date.now() - start
+    const elapsed = Date.now() - start
 
     // 1-hour hard ceiling: return a sentinel instead of throwing
     if (elapsed >= GIVE_UP_AFTER_MS) return POLL_GAVE_UP
@@ -33,8 +37,11 @@ async function pollUntilReady(videoId, signal, onLongRunning) {
     if (signal?.aborted) throw new Error('Cancelled')
 
     const vid = await getVideo(videoId)
-    if (vid.status === 'done' || vid.status === 'ready') return vid
-    if (vid.status === 'failed') throw new Error('Transcription failed on the server. Please try again.')
+    if (vid.status === 'completed') return vid
+    if (vid.status === 'failed') throw new Error('Processing failed on the server. Please try again.')
+
+    // Let caller advance the progress UI based on actual backend state
+    onStatusChange?.(vid.status)
 
     // Transition to slow phase: notify once so the UI can update its message
     if (!slowPhaseNotified && elapsed >= SLOW_AFTER_MS) {
@@ -46,23 +53,31 @@ async function pollUntilReady(videoId, signal, onLongRunning) {
 
 function statusLabel(status) {
   switch (status) {
-    case 'ready':       return 'Ready'
+    case 'completed':    return 'Ready'
+    case 'ready':        return 'Ready'
+    case 'queued':       return 'Queued'
+    case 'transcribing': return 'Transcribing…'
+    case 'embedding':    return 'Indexing…'
+    case 'processing':   return 'Processing…'
     case 'pending':
-    case 'uploaded':    return 'Uploaded'
-    case 'processing':  return 'Processing…'
-    case 'done':        return 'Transcribed'
-    case 'failed':      return 'Failed'
-    default:            return status || 'Unknown'
+    case 'uploaded':     return 'Uploaded'
+    case 'done':         return 'Transcribed'
+    case 'failed':       return 'Failed'
+    default:             return status || 'Unknown'
   }
 }
 
 function statusBadgeClass(status) {
   switch (status) {
-    case 'ready':       return 'badge badge--success'
-    case 'done':        return 'badge badge--warn'
-    case 'processing':  return 'badge badge--warn'
-    case 'failed':      return 'badge badge--error'
-    default:            return 'badge badge--muted'
+    case 'completed':
+    case 'ready':        return 'badge badge--success'
+    case 'queued':
+    case 'transcribing':
+    case 'embedding':
+    case 'processing':
+    case 'done':         return 'badge badge--warn'
+    case 'failed':       return 'badge badge--error'
+    default:             return 'badge badge--muted'
   }
 }
 
@@ -104,9 +119,8 @@ export default function VideoList() {
     if (phase === 'ready') fetchVideos()
   }, [phase])
 
-  // Auto-poll any videos that are already in 'processing' state
-  // (handles page refresh mid-transcription)
-  const hasProcessing = videos.some(v => v.status === 'processing')
+  // Auto-poll any videos still in progress (handles page refresh mid-pipeline)
+  const hasProcessing = videos.some(v => IN_PROGRESS_STATUSES.has(v.status))
   useEffect(() => {
     if (!hasProcessing) return
     let live = true
@@ -117,7 +131,7 @@ export default function VideoList() {
         const all = await listVideos()
         if (!live) return
         setVideos(Array.isArray(all) ? all : [])
-        if (live && (Array.isArray(all) ? all : []).some(v => v.status === 'processing')) {
+        if (live && (Array.isArray(all) ? all : []).some(v => IN_PROGRESS_STATUSES.has(v.status))) {
           setTimeout(tick, POLL_INTERVAL_MS)
         }
       } catch (_) {
@@ -128,16 +142,6 @@ export default function VideoList() {
     setTimeout(tick, POLL_INTERVAL_MS)
     return () => { live = false }
   }, [hasProcessing])
-
-  // Runs chunk + embed after transcription is confirmed done.
-  async function runPostTranscript(id, signal) {
-    setPhase('chunking')
-    await chunkVideo(id)
-    if (signal?.aborted) throw new Error('Cancelled')
-    setPhase('embedding')
-    await embedVideo(id)
-    setPhase('ready')
-  }
 
   async function handleFileSelected(file) {
     setUploadedVideo(null)
@@ -154,22 +158,26 @@ export default function VideoList() {
       const id = data?.id ?? data?.video_id
       setUploadedVideo(data)
 
-      // Start transcription — backend returns 202 immediately
+      // Kick off the backend pipeline (returns 202 immediately; worker handles the rest)
       setPhase('transcribing')
       await transcribeVideo(id)
 
-      // Poll until done; switch to slow poll + neutral UI after 10 min
-      const result = await pollUntilReady(id, controller.signal, () => setPhase('waiting'))
+      // Advance the progress step card as the backend moves through its stages
+      function onStatusChange(status) {
+        if (status === 'embedding') setPhase('embedding')
+      }
+
+      // Poll until the worker marks the video completed
+      const result = await pollUntilReady(id, controller.signal, () => setPhase('waiting'), onStatusChange)
 
       if (result === POLL_GAVE_UP) {
-        // Backend has not failed — job is still running. Show "stalled" state,
-        // not an error. The user can manually check back or refresh.
+        // Backend has not failed — job is still running. Show "stalled" state, not an error.
         setPhase('stalled')
         return
       }
 
-      // result is a VideoRead with status === 'done'
-      await runPostTranscript(id, controller.signal)
+      // Backend pipeline is complete (transcription + chunking + embedding all done server-side)
+      setPhase('ready')
     } catch (err) {
       if (err.message === 'Cancelled') return // component unmounted — ignore
       setUploadError(err.message)
@@ -190,19 +198,21 @@ export default function VideoList() {
       const vid = await getVideo(id)
 
       if (vid.status === 'failed') {
-        setUploadError('Transcription failed on the server. Please try again.')
+        setUploadError('Processing failed on the server. Please try again.')
         setPhase('error')
-      } else if (vid.status === 'done') {
-        // Transcription finished while we weren't watching — continue pipeline
-        await runPostTranscript(id, controller.signal)
+      } else if (vid.status === 'completed') {
+        setPhase('ready')
       } else {
-        // Still processing — restart slow polling loop
+        // Still in progress — restart slow polling loop
         setPhase('waiting')
-        const result = await pollUntilReady(id, controller.signal, () => {})
+        function onStatusChange(status) {
+          if (status === 'embedding') setPhase('embedding')
+        }
+        const result = await pollUntilReady(id, controller.signal, () => {}, onStatusChange)
         if (result === POLL_GAVE_UP) {
           setPhase('stalled')
         } else {
-          await runPostTranscript(id, controller.signal)
+          setPhase('ready')
         }
       }
     } catch (err) {

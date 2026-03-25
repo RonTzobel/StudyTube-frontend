@@ -7,32 +7,45 @@ import {
 
 // ── Readiness helpers ──────────────────────────────────────────────────────
 //
-// Backend status values:
-//   uploaded / pending  → file stored, not yet processed
-//   processing          → transcription running
-//   done                → transcript exists  (NOT necessarily indexed)
-//   failed              → transcription error
+// Current backend status values:
+//   uploaded / pending  → file stored, not yet queued
+//   queued              → waiting in worker queue
+//   processing          → worker picked up the job
+//   transcribing        → Whisper is running
+//   embedding           → chunk + embed step running
+//   completed           → fully ready (transcript + chunks + embeddings)
+//   failed              → pipeline error
 //
-// "done" is NOT sufficient for chat/quiz — those require chunk + embed.
-// We infer indexing readiness by checking whether any stored chunks are embedded.
-// This is the only signal available without a backend schema change.
+// Legacy status:
+//   done                → transcript only (older videos; embeddings not guaranteed)
+//   ready               → older explicit "AI-ready" signal
+//
+// "completed" is the definitive signal that chat, quiz, and summary are all available.
+// For legacy "done" videos we fall back to checking embedded chunk count.
 
 function statusLabel(status, isAiReady) {
   switch (status) {
-    case 'ready':      return 'Ready'
-    case 'done':       return isAiReady ? 'Ready' : 'Transcript ready'
+    case 'completed':    return 'Ready'
+    case 'ready':        return 'Ready'
+    case 'done':         return isAiReady ? 'Ready' : 'Transcript ready'
+    case 'queued':       return 'Queued'
+    case 'transcribing': return 'Transcribing…'
+    case 'embedding':    return 'Indexing…'
     case 'pending':
-    case 'uploaded':   return 'Uploaded'
-    case 'processing': return 'Processing…'
-    case 'failed':     return 'Failed'
-    default:           return status || 'Unknown'
+    case 'uploaded':     return 'Uploaded'
+    case 'processing':   return 'Processing…'
+    case 'failed':       return 'Failed'
+    default:             return status || 'Unknown'
   }
 }
 
 function statusBadgeClass(status, isAiReady) {
-  if (status === 'ready') return 'badge badge--success'
-  if (status === 'done')  return isAiReady ? 'badge badge--success' : 'badge badge--warn'
+  if (status === 'completed' || status === 'ready') return 'badge badge--success'
+  if (status === 'done') return isAiReady ? 'badge badge--success' : 'badge badge--warn'
   switch (status) {
+    case 'queued':
+    case 'transcribing':
+    case 'embedding':
     case 'processing': return 'badge badge--warn'
     case 'failed':     return 'badge badge--error'
     default:           return 'badge badge--muted'
@@ -109,9 +122,9 @@ export default function VideoDetail() {
         setSessions(all.filter(s => s.video_id === videoId))
       } catch (_) {}
 
-      // Non-fatal: fetch chunks to check whether embeddings exist.
-      // Only worth calling when the transcript is ready (status === 'done').
-      // While this is loading, Chat and Quiz stay disabled (safe default).
+      // Non-fatal: fetch chunks to verify embeddings for legacy 'done' videos.
+      // 'completed' videos are always AI-ready — no chunk check needed.
+      // While this is loading for 'done' videos, Chat and Quiz stay disabled (safe default).
       if (vid?.status === 'done') {
         try {
           const list = await getChunks(videoId)
@@ -174,12 +187,15 @@ export default function VideoDetail() {
   }
   if (!video) return null
 
-  // Transcript exists once status is 'done' or 'ready' — sufficient for summary
-  const isDone = video.status === 'done' || video.status === 'ready'
+  // Transcript exists once the pipeline has at least finished transcription
+  const isDone = video.status === 'completed'
+    || video.status === 'ready'
+    || video.status === 'done'
 
-  // 'ready' is the backend's explicit signal that chunk + embed are complete.
-  // For older 'done' videos without that status, fall back to checking embedded chunks.
-  const isAiReady = video.status === 'ready'
+  // 'completed' is the current backend signal that everything is ready.
+  // 'ready' is the legacy equivalent. For older 'done' videos, fall back to chunk check.
+  const isAiReady = video.status === 'completed'
+    || video.status === 'ready'
     || (video.status === 'done' && !loadingChunks && embeddedChunkCount > 0)
 
   const quizScore = quiz && quizSubmitted
