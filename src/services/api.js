@@ -37,7 +37,13 @@ async function request(method, path, body = null, isFormData = false) {
     let message = `HTTP ${res.status}`
     try {
       const err = await res.json()
-      message = err.detail || err.message || JSON.stringify(err)
+      if (Array.isArray(err.detail)) {
+        // FastAPI/Pydantic 422 validation errors: [{ loc, msg, type }, ...]
+        // Join the human-readable msg fields so callers get a plain string.
+        message = err.detail.map(d => d.msg).filter(Boolean).join(' ') || JSON.stringify(err)
+      } else {
+        message = err.detail || err.message || JSON.stringify(err)
+      }
     } catch (_) {
       // ignore parse errors, keep generic message
     }

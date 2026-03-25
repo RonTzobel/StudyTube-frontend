@@ -20,8 +20,8 @@ export default function RegisterPage() {
       setError('Password must be at least 8 characters.')
       return
     }
-    if (password.length > 64) {
-      setError('Password is too long. Please choose a shorter password.')
+    if (new TextEncoder().encode(password).length > 72) {
+      setError('Your password is too long. Please choose a shorter password.')
       return
     }
     setLoading(true)
@@ -85,7 +85,7 @@ export default function RegisterPage() {
               required
               autoComplete="new-password"
             />
-            <p className="input-hint">Use 8–64 characters.</p>
+            <p className="input-hint">Use at least 8 characters. Avoid emoji or very long passwords.</p>
           </div>
 
           {error && <p className="msg error">{error}</p>}
@@ -108,8 +108,8 @@ function friendlyRegisterError(msg) {
   if (m.includes('already') || m.includes('exists') || m.includes('duplicate')) {
     return 'An account with this email already exists.'
   }
-  if (m.includes('password')) {
-    return 'Password is invalid. Please choose a password between 8 and 64 characters.'
+  if (m.includes('password') || m.includes('value_error')) {
+    return 'Your password is too long or contains unsupported characters. Please choose a different password.'
   }
   if (m.includes('network') || m.includes('failed to fetch')) {
     return 'Cannot reach the server. Check your connection.'
