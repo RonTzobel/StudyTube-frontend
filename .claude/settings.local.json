@@ -6,7 +6,8 @@
       "Read(//c/Program Files/**)",
       "Read(//c/Users/Ronzo/AppData/Roaming/**)",
       "Read(//c/Users/Ronzo/.bun/**)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(\"C:\\\\Users\\\\Ronzo\\\\StudyTube\\\\frontend\\\\README.md\":*)"
     ]
   }
 }
